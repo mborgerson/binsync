@@ -69,7 +69,7 @@ class QActivityTable(QTableWidget):
     def __init__(self, controller: BinSyncController, parent=None):
         super(QActivityTable, self).__init__(parent)
         self.controller = controller
-        self.items = []
+        self.items = dict()
 
         self.setColumnCount(len(self.HEADER))
         self.setHorizontalHeaderLabels(self.HEADER)
@@ -91,9 +91,9 @@ class QActivityTable(QTableWidget):
         self.setSortingEnabled(False)
         self.setRowCount(len(self.items))
 
-        for idx, item in enumerate(self.items):
-            for i, it in enumerate(item.widgets()):
-                self.setItem(idx, i, it)
+        for idx, item in enumerate(self.items.values()):
+            for i, attr in enumerate(item.widgets()):
+                self.setItem(idx, i, attr)
 
         self.viewport().update()
         self.setSortingEnabled(True)
@@ -119,41 +119,19 @@ class QActivityTable(QTableWidget):
         menu.popup(self.mapToGlobal(event.pos()))
 
     def update_table(self):
-        self.items = []
-
         # first check if any functions are unknown to the table
         for user in self.controller.users():
-            changed_funcs = {}
             state = self.controller.client.get_state(user=user.name)
             user_funcs: Dict[int, Function] = state.functions
 
-            for func_addr, sync_func in user_funcs.items():
-                func_change_time = sync_func.last_change
-
-                # don't add functions that were never changed by the user
-                if not sync_func.last_change:
-                    continue
-
-                # check if we already know about it
-                if func_addr in changed_funcs:
-                    # compare this users change time to the store change time
-                    if not func_change_time or func_change_time < changed_funcs[func_addr]:
-                        continue
-
-                changed_funcs[func_addr] = func_change_time
-
-            if len(changed_funcs) > 0:
-                most_recent_func = list(changed_funcs)[0]
-                last_state_change = state.last_push_time \
-                    if not state.last_push_time \
-                    else list(changed_funcs.values())[0]
+            if user_funcs.items():
+                most_recent_func, last_function = max(user_funcs.items(), key = lambda x: x[1].last_change or 0)
+                last_state_change = last_function.last_change
+                last_state_change = max(state.last_push_time, last_state_change)
             else:
-                most_recent_func = ""
-                last_state_change = state.last_push_time
+                most_recent_func, last_state_change = "", state.last_push_time
 
-            self.items.append(
-                QActivityItem(user.name, most_recent_func, last_state_change)
-            )
+            self.items[user.name] = (QActivityItem(user.name, most_recent_func, last_state_change))
 
     def _get_valid_funcs_for_user(self, username):
         user_state: State = self.controller.client.get_state(user=username, priority=SchedSpeed.FAST)

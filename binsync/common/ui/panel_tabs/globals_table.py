@@ -23,6 +23,12 @@ class QGlobalItem:
         self.user = user
         self.last_push = last_push
 
+    def __eq__(self, other):
+        return self.name == other.name and self.type == other.type
+
+    def __hash__(self):
+        return sum((self.type + self.name).encode())
+
     def widgets(self):
         # sort by int value
         name = QTableWidgetItem(self.name)
@@ -47,6 +53,16 @@ class QGlobalItem:
 
 
 class QGlobalsTable(QTableWidget):
+    FUNCTION_MAP = {
+        "get Struct": "get_struct",
+        "get Variable": "get_global_var",
+        "get Enum": "get_enum",
+
+        "fill Struct": "fill_struct",
+        "fill Variable": "fill_global_var",
+        "fill Enum": "fill_enum"
+    }
+
     HEADER = [
         'Name',
         'Type',
@@ -57,7 +73,8 @@ class QGlobalsTable(QTableWidget):
     def __init__(self, controller: BinSyncController, parent=None):
         super(QGlobalsTable, self).__init__(parent)
         self.controller = controller
-        self.items = []
+        self.items = dict()
+        self.last_table = set()
 
         self.setColumnCount(len(self.HEADER))
         self.setHorizontalHeaderLabels(self.HEADER)
@@ -78,11 +95,14 @@ class QGlobalsTable(QTableWidget):
     def reload(self):
         self.setSortingEnabled(False)
         self.setRowCount(len(self.items))
+        new_table = set(self.items.values())
+        new_entries = new_table.difference(self.last_table)
 
-        for idx, item in enumerate(self.items):
-            for i, it in enumerate(item.widgets()):
-                self.setItem(idx, i, it)
+        for idx, item in enumerate(new_entries):
+            for i, attr in enumerate(item.widgets()):
+                self.setItem(idx, i, attr)
 
+        self.last_table = new_table
         self.viewport().update()
         self.setSortingEnabled(True)
 
@@ -94,21 +114,13 @@ class QGlobalsTable(QTableWidget):
         selected_row = self.rowAt(event.pos().y())
         item0 = self.item(selected_row, 0)
         item1 = self.item(selected_row, 1)
-        item2 = self.item(selected_row, 2)
-        if any(x is None for x in [item0, item1, item2]):
+        if any(x is None for x in [item0, item1]):
             return
         global_name = item0.text()
         global_type = item1.text()
-        user_name = item2.text()
 
-        if global_type == "Struct":
-            filler_func = self.controller.fill_struct
-        elif global_type == "Variable":
-            global_name = int(re.findall(r'0x[a-f,0-9]+', global_name.split(" ")[1])[0], 16)
-            filler_func = self.controller.fill_global_var
-        elif global_type == "Enum":
-            filler_func = self.controller.fill_enum
-        else:
+        filler_func = self.FUNCTION_MAP["fill " + global_type]
+        if not filler_func:
             l.warning(f"Invalid global table sync option: {global_type}")
             return
 
@@ -121,42 +133,20 @@ class QGlobalsTable(QTableWidget):
         menu.popup(self.mapToGlobal(event.pos()))
 
     def update_table(self):
-        known_globals = {}
-
         for user in self.controller.users():
             state = self.controller.client.get_state(user=user.name)
-            user_structs = state.structs
-            user_gvars = state.global_vars
-            user_enums = state.enums
 
-            all_artifacts = ((user_enums, "Enum"), (user_structs, "Struct"), (user_gvars, "Variable"))
+            all_artifacts = ((state.enums, "Enum"), (state.structs, "Struct"), (state.global_vars, "Variable"))
             for user_artifacts, global_type in all_artifacts:
-                for _, artifact in user_artifacts.items():
-                    change_time = artifact.last_change
-
-                    if not change_time:
-                        continue
-
-                    if artifact.name in known_globals:
-                        # change_time < artifact_stored_change_time
-                        if not change_time or change_time < known_globals[artifact.name][3]:
-                            continue
-
-                    artifact_name = artifact.name if global_type != "Variable" \
-                        else f"{artifact.name} ({hex(artifact.addr)})"
-
-                    known_globals[artifact_name] = (artifact_name, global_type, user.name, change_time)
-
-        self.items = [QGlobalItem(*row) for row in known_globals.values()]
+                new_artifacts = filter(lambda x: (x.last_change or 0) > self.items[x.name].last_change)
+                newest_artifact = max(new_artifacts, lambda x: x.last_change)
+                self.items[newest_artifact.name] = \
+                    QGlobalItem(newest_artifact.name, global_type, user.name, newest_artifact.last_change)
 
     def _get_valid_users_for_global(self, global_name, global_type):
-        if global_type == "Struct":
-            global_getter = "get_struct"
-        elif global_type == "Variable":
-            global_getter = "get_global_var"
-        elif global_type == "Enum":
-            global_getter = "get_enum"
-        else:
+        global_getter = map(global_type)
+
+        if not global_getter:
             l.warning("Failed to get a valid type for global type")
             return
 

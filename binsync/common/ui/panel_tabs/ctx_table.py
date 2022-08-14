@@ -64,7 +64,7 @@ class QCTXTable(QTableWidget):
     def __init__(self, controller: BinSyncController, parent=None):
         super(QCTXTable, self).__init__(parent)
         self.controller = controller
-        self.items = []
+        self.items = dict()
         self.ctx = None
 
         # header
@@ -88,7 +88,7 @@ class QCTXTable(QTableWidget):
         self.setSortingEnabled(False)
         self.setRowCount(len(self.items))
 
-        for idx, item in enumerate(self.items):
+        for idx, item in enumerate(self.items.values()):
             for i, it in enumerate(item.widgets()):
                 self.setItem(idx, i, it)
 
@@ -116,16 +116,13 @@ class QCTXTable(QTableWidget):
             return
 
         self.ctx = new_ctx or self.ctx
-        self.items = []
+
         for user in self.controller.users():
             state = self.controller.client.get_state(user=user.name)
 
             func = state.get_function(self.ctx)
 
-            if not func or not func.last_change:
+            if not (func or func.last_change):
                 continue
 
-            # changes is not currently supported
-            self.items.append(
-                QCTXItem(user.name, func.name, func.last_change, 0)
-            )
+            self.items[user.name] = QCTXItem(user.name, func.name, func.last_change, 0)
